@@ -3,183 +3,177 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Video Calling System</title>
+  <title>Live Video Calling</title>
   <style>
-    video {
-      width: 300px;
-      height: 200px;
-      margin-bottom: 10px;
-      border: 2px solid black;
-      border-radius: 5px;
+    body {
+      font-family: 'Arial', sans-serif;
+      background-color: #f1f1f1;
+      margin: 0;
+      padding: 0;
+      display: flex;
+      align-items: stretch; /* Stretch container vertically */
+    }
+
+    #sidebar {
+      width: 200px;
+      background-color: #333;
+      color: white;
+      padding: 10px;
+      box-shadow: 2px 0 5px rgba(0, 0, 0, 0.1);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    #userList {
+      margin-top: 10px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    #userList button {
+      margin-bottom: 5px;
+    }
+
+    #main {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      width: 100%;
+    }
+
+    h1 {
+      color: #333;
+    }
+
+    #localVideo, #remoteVideo {
+      width: 320px;
+      height: 240px;
+      margin: 10px;
+      border: 2px solid #333;
+      border-radius: 8px;
     }
   </style>
 </head>
 <body>
-  <h1>Video Calling System</h1>
+  <div id="sidebar">
+    <h2>Live Users</h2>
+    <div id="userList"></div>
+  </div>
 
-  <!-- Local Video -->
-  <video id="localVideo" autoplay muted></video>
+  <div id="main">
+    <h1>Live Video Calling</h1>
+    <video id="localVideo" autoplay muted></video>
+    <video id="remoteVideo" autoplay></video>
+  </div>
 
-  <!-- Remote Video -->
-  <video id="remoteVideo" autoplay></video>
-
+  <script src="https://www.gstatic.com/firebasejs/4.3.0/firebase.js"></script>
   <script>
-    // Firebase configuration
+    // Initialize Firebase
     const firebaseConfig = {
-      apiKey:"AIzaSyDgY9qT22cGrA7d46axjzJT5g5EZ2SxsRw",
-        authDomain: "mextube-2b3e3.firebaseapp.com",
-        projectId: "mextube-2b3e3",
-        storageBucket: "mextube-2b3e3.appspot.com",
-        messagingSenderId: "821910922346",
-        appId: "1:821910922346:web:b7f79bb310793978de1613"
+        apiKey: "AIzaSyDgY9qT22cGrA7d46axjzJT5g5EZ2SxsRw",
+    authDomain: "mextube-2b3e3.firebaseapp.com",
+    databaseURL: "https://mextube-2b3e3-default-rtdb.firebaseio.com",
+    projectId: "mextube-2b3e3",
+    storageBucket: "mextube-2b3e3.appspot.com",
+    messagingSenderId: "821910922346",
+    appId: "1:821910922346:web:b7f79bb310793978de1613"
     };
 
-    // Initialize Firebase
     firebase.initializeApp(firebaseConfig);
 
-    // Get a reference to the database service
-    const database = firebase.firestore();
+    const database = firebase.database();
+    const roomRef = database.ref("rooms");
 
-    // Set up WebRTC
-    let localStream;
-    let remoteStream;
-    let localVideo = document.getElementById("localVideo");
-    let remoteVideo = document.getElementById("remoteVideo");
-    let peerConnection;
+    const configuration = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
+    const peerConnection = new RTCPeerConnection(configuration);
+    let localStream, remoteStream;
 
-    // Get user media
     navigator.mediaDevices.getUserMedia({ video: true, audio: true })
-      .then(function(stream) {
+      .then(stream => {
         localStream = stream;
-        localVideo.srcObject = localStream;
+        document.getElementById("localVideo").srcObject = stream;
+        peerConnection.addStream(stream);
       })
-      .catch(function(error) {
-        console.error("Error accessing media devices:", error);
+      .catch(error => console.error("Error accessing media devices:", error));
+
+    const userListContainer = document.getElementById("userList");
+
+    // Listen for changes in live users
+    roomRef.on("child_added", snapshot => {
+      const userName = snapshot.key;
+      const userButton = document.createElement("button");
+      userButton.textContent = userName;
+      userButton.addEventListener("click", () => {
+        // User clicked on another user's name, initiate connection
+        connectToUser(userName);
       });
+      userListContainer.appendChild(userButton);
+    });
 
-    // Create an RTCPeerConnection
-    function createPeerConnection() {
-      peerConnection = new RTCPeerConnection();
+    // Listen for remote ICE candidates
+    roomRef.child("candidates").on("child_added", snapshot => {
+      const candidate = new RTCIceCandidate(snapshot.val());
+      peerConnection.addIceCandidate(candidate);
+    });
 
-      // Add local stream to peer connection
-      localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
-
-      // Set up event handlers
-      peerConnection.ontrack = handleRemoteStreamAdded;
-      peerConnection.onicecandidate = handleIceCandidate;
-    }
-
-    // Function to handle remote stream added
-    function handleRemoteStreamAdded(event) {
-      remoteStream = event.streams[0];
-      remoteVideo.srcObject = remoteStream;
-    }
-
-    // Function to handle ICE candidates
-    function handleIceCandidate(event) {
-      if (event.candidate) {
-        sendIceCandidate(event.candidate.toJSON());
+    // Listen for remote SDP messages
+    roomRef.child("offer").on("value", async snapshot => {
+      const offer = snapshot.val();
+      if (offer) {
+        await peerConnection.setRemoteDescription(offer);
+        const answer = await peerConnection.createAnswer();
+        await peerConnection.setLocalDescription(answer);
+        roomRef.child("answer").set(answer);
       }
-    }
-
-    // Function to send ICE candidate to the other peer
-    function sendIceCandidate(candidate) {
-      // Send candidate to the other peer using Firebase Firestore or WebSocket
-      // Example: database.collection("iceCandidates").add(candidate);
-    }
-
-    // Function to receive ICE candidate from the other peer
-    function receiveIceCandidate(candidate) {
-      // Add candidate to peer connection
-      peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
-    }
-
-    // Function to start a call
-    function startCall() {
-      // Create peer connection
-      createPeerConnection();
-
-      // Offer session
-      peerConnection.createOffer()
-        .then(function(offer) {
-          // Set local description
-          return peerConnection.setLocalDescription(offer);
-        })
-        .then(function() {
-          // Send offer to the other peer
-          // Example: database.collection("offers").add(peerConnection.localDescription.toJSON());
-        })
-        .catch(function(error) {
-          console.error("Error creating offer:", error);
-        });
-    }
-
-    // Function to receive an offer from the other peer
-    function receiveOffer(offer) {
-      // Create peer connection
-      createPeerConnection();
-
-      // Set remote description
-      peerConnection.setRemoteDescription(new RTCSessionDescription(offer))
-        .then(function() {
-          // Create answer
-          return peerConnection.createAnswer();
-        })
-        .then(function(answer) {
-          // Set local description
-          return peerConnection.setLocalDescription(answer);
-        })
-        .then(function() {
-          // Send answer to the other peer
-          // Example: database.collection("answers").add(peerConnection.localDescription.toJSON());
-        })
-        .catch(function(error) {
-          console.error("Error creating answer:", error);
-        });
-    }
-
-    // Function to receive an answer from the other peer
-    function receiveAnswer(answer) {
-      // Set remote description
-      peerConnection.setRemoteDescription(new RTCSessionDescription(answer))
-        .catch(function(error) {
-          console.error("Error setting remote description:", error);
-        });
-    }
-
-    // Listen for offers from the other peer
-    database.collection("offers").onSnapshot(function(snapshot) {
-      snapshot.docChanges().forEach(function(change) {
-        if (change.type === "added") {
-          receiveOffer(change.doc.data());
-        }
-      });
     });
 
-    // Listen for answers from the other peer
-    database.collection("answers").onSnapshot(function(snapshot) {
-      snapshot.docChanges().forEach(function(change) {
-        if (change.type === "added") {
-          receiveAnswer(change.doc.data());
-        }
-      });
+    // Listen for remote answer
+    roomRef.child("answer").on("value", async snapshot => {
+      const answer = snapshot.val();
+      if (answer) {
+        await peerConnection.setRemoteDescription(answer);
+      }
     });
 
-    // Listen for ICE candidates from the other peer
-    database.collection("iceCandidates").onSnapshot(function(snapshot) {
-      snapshot.docChanges().forEach(function(change) {
-        if (change.type === "added") {
-          receiveIceCandidate(change.doc.data());
-        }
-      });
-    });
+    // Send local ICE candidates to the other peer
+    peerConnection.onicecandidate = event => {
+      if (event.candidate) {
+        roomRef.child("candidates").push(event.candidate.toJSON());
+      }
+    };
 
-    // Start call when the button is clicked
-    document.getElementById("startCallButton").addEventListener("click", startCall);
+    // Add remote stream to remote video element
+    peerConnection.onaddstream = event => {
+      remoteStream = event.stream;
+      document.getElementById("remoteVideo").srcObject = remoteStream;
+    };
+
+    // Create and send offer to Firebase
+    const createOffer = async () => {
+      try {
+        const offer = await peerConnection.createOffer();
+        await peerConnection.setLocalDescription(offer);
+        roomRef.child("offer").set(offer);
+      } catch (error) {
+        console.error("Error creating offer:", error);
+      }
+    };
+
+    // Create offer when local stream is available
+    peerConnection.onnegotiationneeded = createOffer;
+
+    // Start the call
+    createOffer();
+
+    // Function to initiate connection with another user
+    function connectToUser(userName) {
+      console.log("Connecting to user:", userName);
+      // Implement your logic to accept the connection and notify the other user
+    }
+    
   </script>
-
-  <!-- Button to start a call -->
-  <button id="startCallButton">Start Call</button>
 </body>
 </html>
-

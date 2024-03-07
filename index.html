@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Live Video Call</title>
+  <style>
+    #localVideo, #remoteVideo {
+      width: 320px;
+      height: 240px;
+      margin: 10px;
+      border: 1px solid black;
+    }
+    body {
+  font-family: 'Arial', sans-serif;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+  background-color: #f5f5f5;
+}
+
+h1 {
+  margin-bottom: 20px;
+}
+
+#videos {
+  display: flex;
+  justify-content: space-around;
+  margin-bottom: 20px;
+}
+
+video {
+  border-radius: 8px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+#joinButton {
+  padding: 10px 20px;
+  font-size: 16px;
+  background-color: #4CAF50;
+  color: #fff;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+  transition: background-color 0.3s;
+}
+
+#joinButton:disabled {
+  background-color: #ccc;
+  cursor: not-allowed;
+}
+
+#joinButton:hover:enabled {
+  background-color: #45a049;
+}
+
+  </style>
+</head>
+<body>
+
+  <h1>Live Video Call</h1>
+  
+  <div id="videos">
+    <video id="localVideo" autoplay muted></video>
+    <video id="remoteVideo" autoplay></video>
+  </div>
+
+  <button id="joinButton">Join Call</button>
+
+  <script src="https://www.gstatic.com/firebasejs/4.3.0/firebase.js"></script>
+  <script src="https://webrtc.github.io/adapter/adapter-latest.js"></script>
+  <script>const firebaseConfig = {
+    apiKey: "AIzaSyDgY9qT22cGrA7d46axjzJT5g5EZ2SxsRw",
+    authDomain: "mextube-2b3e3.firebaseapp.com",
+    databaseURL: "https://mextube-2b3e3-default-rtdb.firebaseio.com",
+    projectId: "mextube-2b3e3",
+    storageBucket: "mextube-2b3e3.appspot.com",
+    messagingSenderId: "821910922346",
+    appId: "1:821910922346:web:b7f79bb310793978de1613"
+  };
+  
+  
+  firebase.initializeApp(firebaseConfig);
+  
+  const database = firebase.database();
+  
+  const localVideo = document.getElementById('localVideo');
+  const remoteVideo = document.getElementById('remoteVideo');
+  const joinButton = document.getElementById('joinButton');
+  
+  let localStream;
+  let remoteStream;
+  let pc;
+  
+  const offerOptions = {
+    offerToReceiveAudio: 1,
+    offerToReceiveVideo: 1
+  };
+  
+  // Function to initialize the local video stream
+  async function initLocalStream() {
+    try {
+      localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      localVideo.srcObject = localStream;
+    } catch (e) {
+      console.error('Error accessing media devices:', e);
+    }
+  }
+  
+  // Function to create peer connection
+  function createPeerConnection() {
+    pc = new RTCPeerConnection();
+    pc.onicecandidate = handleICECandidate;
+    pc.ontrack = handleTrack;
+  }
+  
+  // Function to handle ICE candidates
+  function handleICECandidate(event) {
+    if (event.candidate) {
+      sendICECandidate(event.candidate);
+    }
+  }
+  
+  // Function to handle incoming tracks
+  function handleTrack(event) {
+    remoteVideo.srcObject = event.streams[0];
+  }
+  
+  // Function to send ICE candidate to the other peer
+  function sendICECandidate(candidate) {
+    const candidateData = candidate.toJSON();
+    database.ref('iceCandidates').push(candidateData);
+  }
+  
+  // Function to receive ICE candidates from the other peer
+  function receiveICECandidates() {
+    database.ref('iceCandidates').on('child_added', function(snapshot) {
+      const candidate = new RTCIceCandidate(snapshot.val());
+      pc.addIceCandidate(candidate);
+    });
+  }
+  
+  // Function to start the call
+  async function startCall() {
+    joinButton.disabled = true;
+    await initLocalStream();
+    createPeerConnection();
+    localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+    await createOffer();
+    receiveICECandidates();
+  }
+  
+  // Function to create and send offer to the other peer
+  async function createOffer() {
+    try {
+      const offer = await pc.createOffer(offerOptions);
+      await pc.setLocalDescription(offer);
+      sendOffer(offer);
+    } catch (e) {
+      console.error('Error creating offer:', e);
+    }
+  }
+  
+  // Function to send offer to the other peer
+  function sendOffer(offer) {
+    database.ref('offer').set({
+      type: offer.type,
+      sdp: offer.sdp
+    });
+  }
+  
+  // Function to receive offer from the other peer
+  function receiveOffer() {
+    database.ref('offer').on('value', async function(snapshot) {
+      const offer = snapshot.val();
+      await pc.setRemoteDescription(new RTCSessionDescription(offer));
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      sendAnswer(answer);
+    });
+  }
+  
+  // Function to send answer to the other peer
+  function sendAnswer(answer) {
+    database.ref('answer').set({
+      type: answer.type,
+      sdp: answer.sdp
+    });
+  }
+  
+  // Function to receive answer from the other peer
+  function receiveAnswer() {
+    database.ref('answer').on('value', async function(snapshot) {
+      const answer = snapshot.val();
+      await pc.setRemoteDescription(new RTCSessionDescription(answer));
+    });
+  }
+  
+  joinButton.addEventListener('click', startCall);
+  receiveOffer();
+  receiveAnswer();
+  </script>
+</body>
+</html>
